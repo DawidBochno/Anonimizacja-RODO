@@ -1,9 +1,12 @@
 # Anonimizacja RODO (DOCX / PDF)
 
-Program **lokalny** — działa w całości na Twoim komputerze, nie łączy się
-z internetem i nigdzie nie wysyła dokumentów. Do przygotowania pism do
+Program **lokalny** — działa w całości na Twoim komputerze, nigdzie nie wysyła
+dokumentów. Z internetem łączy się tylko po to, żeby sprawdzić
+[aktualizacje](#aktualizacje). Do przygotowania pism do
 publikacji w BIP, odpowiedzi na wnioski o informację publiczną, przekazania
 dokumentów dalej bez danych osobowych.
+
+![Okno programu](docs/okno.png)
 
 ## Co usuwa
 
@@ -43,16 +46,57 @@ w okienku „Dodatkowe słowa” (jedno w linii).
 Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
 `nazwa_anonim.docx`. Oryginał nie jest zmieniany.
 
-## Szybki start
+## Instalacja (jednorazowo)
 
-1. `install.bat` — instaluje biblioteki (`PyMuPDF`, `python-docx`)
-   i uruchamia self-test.
-2. Wrzuć pliki do folderu `INPUT`.
-3. `uruchom.bat` → zaznacz kategorie → ewentualnie wpisz nazwiska →
-   **Anonimizuj**.
-4. Wyniki są w folderze `OUTPUT`. **Zawsze je przejrzyj przed publikacją.**
+1. **Python** — pobierz z [python.org](https://www.python.org/downloads/windows/)
+   (wersja 3.9 lub nowsza). W instalatorze zaznacz **„Add python.exe to PATH”**.
+   Opcja „tcl/tk and IDLE” jest zaznaczona domyślnie i musi taka zostać.
+   Uprawnienia administratora nie są potrzebne.
+2. **Program** — na stronie [github.com/DawidBochno/Anonimizacja-RODO](https://github.com/DawidBochno/Anonimizacja-RODO)
+   kliknij zielony przycisk **Code → Download ZIP**. Rozpakuj archiwum,
+   np. do `C:\Programy\Anonimizacja RODO`. Nie uruchamiaj programu z wnętrza ZIP-a.
+3. Kliknij dwukrotnie **`install.bat`**. Instaluje biblioteki `PyMuPDF` i `python-docx` (potrzebny internet) i uruchamia test. Na końcu pojawia się
+   **„selftest OK”**, co znaczy, że wszystko działa.
+   Jeśli Windows pokaże „System Windows ochronił ten komputer”, kliknij
+   **Więcej informacji → Uruchom mimo to**.
+4. Program uruchamia się plikiem **`uruchom.bat`**. Wygodnie jest zrobić
+   skrót na pulpicie: prawy przycisk na `uruchom.bat` → **Wyślij do →
+   Pulpit (utwórz skrót)**.
 
-Wymaga Pythona 3.9+ z opcjami „Add python.exe to PATH” i „tcl/tk and IDLE”.
+## Jak używać
+
+1. Uruchom `uruchom.bat`.
+2. **Plik lub folder** — przycisk **Plik…** wskazuje jeden dokument,
+   **Folder…** cały folder z plikami DOCX i PDF. Domyślnie jest to `INPUT`.
+3. **Folder wyjściowy** — tu trafią wyniki (domyślnie `OUTPUT`).
+4. **Co usuwać** — odznacz kategorie, które mają zostać, np. NIP firmy
+   w umowie publikowanej w BIP.
+5. **Dodatkowe słowa** — imiona, nazwiska, adresy, nazwy ulic, po jednym
+   w linii. Wielkość liter nie ma znaczenia.
+6. Kliknij **Anonimizuj**. Log pokazuje, co i ile usunięto w każdym pliku.
+7. Wyniki mają w nazwie `_anonim` i leżą w folderze wyjściowym. Oryginały
+   zostają bez zmian. **Zawsze przejrzyj wynik przed publikacją.**
+
+Wynik w PDF. Tekst jest wycięty trwale, a nie tylko zakryty, więc nie
+da się go skopiować ani odczytać spod czarnego prostokąta:
+
+![Wynik anonimizacji PDF](docs/wynik.png)
+
+## Aktualizacje
+
+Po uruchomieniu program sprawdza w tle na GitHubie, czy jest nowa wersja.
+Jeśli jest, pyta **„Pobrać i zainstalować teraz?”**. Pobierane są tylko
+zmienione pliki programu. Foldery `INPUT`, `OUTPUT`, ustawienia i pliki
+w `przyklad/` nie są nadpisywane. Po aktualizacji zamknij i uruchom program ponownie. Jeśli program
+o to poprosi, uruchom też raz `install.bat` (zmieniły się biblioteki).
+
+- Do GitHuba trafia tylko zapytanie o listę plików programu, **nigdy
+  dokumenty ani dane**.
+- Bez internetu albo przy blokadzie (np. UTM) program działa normalnie,
+  bez żadnego komunikatu.
+- **Wyłączenie** (np. gdy programy aktualizuje dział IT): utwórz w folderze
+  programu pusty plik o nazwie `NIE_AKTUALIZUJ`.
+- Kopię pobraną przez `git clone` aktualizuje się poleceniem `git pull`.
 
 ## Ograniczenia
 
