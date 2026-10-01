@@ -34,9 +34,11 @@ w okienku „Dodatkowe słowa” (jedno w linii).
   też są sprawdzane, a znalezione w nich dane zamieniane na `*`.
 - **DOCX** — znaki zamieniane są na `*`, długość tekstu się nie zmienia,
   więc układ dokumentu zostaje. Przetwarzane są treść, tabele, nagłówki,
-  stopki, przypisy oraz tekst usunięty w trybie śledzenia zmian.
+  stopki, przypisy, tekst usunięty w trybie śledzenia zmian oraz adresy
+  hiperłączy (np. `mailto:`).
 - **Metadane** (autor, ostatnio modyfikował, tytuł, komentarz) są czyszczone
-  w obu formatach.
+  w obu formatach. W DOCX usuwane są też właściwości „Firma”, „Menedżer”
+  i właściwości niestandardowe.
 
 Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
 `nazwa_anonim.docx`. Oryginał nie jest zmieniany.

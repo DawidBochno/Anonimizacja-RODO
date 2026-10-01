@@ -126,8 +126,16 @@ def anon_docx(src, dst, enabled, words):
                           if r.reltype.endswith(("/header", "/footer",
                                                  "/footnotes", "/endnotes"))]
     stats = Counter()
-    tags = (qn("w:t"), qn("w:delText"))  # delText = usuniete w trybie sledzenia zmian
+    # delText = usuniete w trybie sledzenia zmian, instrText = pole HYPERLINK "mailto:..."
+    tags = (qn("w:t"), qn("w:delText"), qn("w:instrText"))
     for part in parts:
+        # adres hiperlacza (mailto:...) siedzi w .rels, poza tekstem akapitu
+        for r in part.rels.values():
+            if r.is_external:
+                spans = find_spans(r.target_ref, enabled, words)
+                if spans:
+                    stats.update(s[2] for s in spans)
+                    r._target = mask(r.target_ref, spans)
         for p in part.element.iter(qn("w:p")):
             nodes = [n for n in p.iter(*tags)]
             text = "".join(n.text or "" for n in nodes)
@@ -146,6 +154,11 @@ def anon_docx(src, dst, enabled, words):
     for attr in ("author", "last_modified_by", "comments", "title",
                  "subject", "keywords", "category"):
         setattr(cp, attr, "")
+    # app.xml (Firma, Menedzer) i wlasciwosci niestandardowe - Word dziala bez nich
+    pkg_rels = doc.part.package.rels
+    for rid, r in list(pkg_rels.items()):
+        if r.reltype.endswith(("/extended-properties", "/custom-properties")):
+            del pkg_rels[rid]
     doc.save(dst)
     return stats, 0
 
@@ -314,6 +327,7 @@ def gui():
 
 def selftest():
     import tempfile
+    import zipfile
     import docx
     import pymupdf
 
@@ -343,9 +357,25 @@ def selftest():
     p.add_run("1401359 koniec")
     d.sections[0].footer.paragraphs[0].text = "kontakt: a@b.pl"
     d.core_properties.author = "Jan Kowalski"
+    # hiperlacze mailto: adres jest w .rels, nie w tekscie
+    from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    from docx.oxml import parse_xml
+    rid = d.part.relate_to("mailto:jan.kowalski@urzad.gov.pl", RT.HYPERLINK,
+                           is_external=True)
+    d.add_paragraph()._p.append(parse_xml(
+        '<w:hyperlink xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        ' r:id="%s"><w:r><w:t>napisz</w:t></w:r></w:hyperlink>' % rid))
+    # pole Firma w docProps/app.xml
+    app = next(p for p in d.part.package.iter_parts() if p.partname == "/docProps/app.xml")
+    app._blob = app.blob.replace(b"</Properties>", b"<Company>Kowalski</Company></Properties>")
     src = os.path.join(tmp, "t.docx")
     d.save(src)
+    assert b"Kowalski</Company>" in zipfile.ZipFile(src).read("docProps/app.xml")
     anon_docx(src, os.path.join(tmp, "o.docx"), None, ())
+    with zipfile.ZipFile(os.path.join(tmp, "o.docx")) as z:
+        raw = b"".join(z.read(n) for n in z.namelist())
+    assert b"kowalski" not in raw.lower(), "wyciek w hiperlaczu lub wlasciwosciach"
     o = docx.Document(os.path.join(tmp, "o.docx"))
     assert o.paragraphs[0].text == "PESEL: *********** koniec", o.paragraphs[0].text
     assert "a@b.pl" not in o.sections[0].footer.paragraphs[0].text
