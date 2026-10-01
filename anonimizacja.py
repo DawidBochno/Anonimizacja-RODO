@@ -324,6 +324,8 @@ def gui():
     btn.config(command=start)
     if "--selftest" in sys.argv:
         root.after(200, root.destroy)
+    import aktualizacja
+    aktualizacja.start(root, "DawidBochno/Anonimizacja-RODO", "main", "anonimizacja.py")
     root.mainloop()
 
 
@@ -417,6 +419,8 @@ def selftest():
     assert vals == ["***********"], vals
     assert "44051401359" not in out[0].get_text()
     out.close()
+    import aktualizacja
+    aktualizacja.selftest()
     print("selftest OK")
 
 
