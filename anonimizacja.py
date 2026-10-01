@@ -82,10 +82,15 @@ DETECTORS = [
      r"|(?:\+48|0048) ?\d{9}(?!\d)", None),
 ]
 CATEGORIES = list(dict.fromkeys(name for name, _, _ in DETECTORS))
+# Word i PDF-y uzywaja twardych spacji i roznych dywizow - znak na znak
+# (dlugosc tekstu bez zmian, wiec pozycje trafien pasuja do oryginalu)
+NORMALIZE = str.maketrans("   ­‐‑‒–−",
+                          "   ------")
 
 
 def find_spans(text, enabled=None, words=()):
     """Zwraca [(start, koniec, kategoria)] bez nakladania, posortowane."""
+    text = text.translate(NORMALIZE)
     taken = []
 
     def free(a, b):
@@ -349,6 +354,9 @@ def selftest():
     assert len(m) == len(t) and "12345678901" in m and "44051401359" not in m
     assert "Kowalski." not in m and "kowalski@" not in m
     assert [s[2] for s in find_spans(t, {"E-mail"}, ())] == ["E-mail"]
+    # dywizy i twarde spacje z Worda / PDF (U+00AD, U+2011, U+00A0)
+    t2 = "NIP 123­456­32­18, tel. 600 100 200, 123‑456‑32‑18"
+    assert [s[2] for s in find_spans(t2)] == ["NIP", "Telefon", "NIP"], find_spans(t2)
 
     tmp = tempfile.mkdtemp()
     # DOCX: PESEL pociety na dwa runy + stopka
