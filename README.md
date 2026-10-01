@@ -61,7 +61,7 @@ Wymaga Pythona 3.9+ z opcjami „Add python.exe to PATH” i „tcl/tk and IDLE�
   stronie”**, dane zostały znalezione w tekście, ale nie dało się ich
   wskazać na stronie (np. nietypowe kodowanie czcionki). Sprawdź taki plik
   ręcznie.
-- DOCX: komentarze recenzenckie i pola tekstowe w kształtach (SmartArt)
+- DOCX: komentarze recenzenckie i tekst w grafikach SmartArt
   nie są przetwarzane. Usuń komentarze przed anonimizacją.
 - Formaty `.doc`, `.odt` i `.xlsx` nie są obsługiwane. Zapisz plik jako DOCX
   albo PDF.
