@@ -30,7 +30,8 @@ w okienku „Dodatkowe słowa” (jedno w linii).
 - **PDF** — tekst jest **wycinany z pliku**, a w jego miejscu zostaje czarny
   prostokąt. To nie jest zakrycie: danych nie da się odzyskać przez
   zaznaczenie, skopiowanie ani usunięcie prostokąta. Obrazy pod
-  prostokątem też są zamazywane.
+  prostokątem też są zamazywane. **Pola formularza** (wypełnione wnioski PDF)
+  też są sprawdzane, a znalezione w nich dane zamieniane na `*`.
 - **DOCX** — znaki zamieniane są na `*`, długość tekstu się nie zmienia,
   więc układ dokumentu zostaje. Przetwarzane są treść, tabele, nagłówki,
   stopki, przypisy oraz tekst usunięty w trybie śledzenia zmian.
@@ -55,6 +56,7 @@ Wymaga Pythona 3.9+ z opcjami „Add python.exe to PATH” i „tcl/tk and IDLE�
 
 - **Skany PDF bez warstwy tekstowej** nie są obsługiwane, program zgłosi
   błąd. Najpierw przepuść je przez OCR (np. program *PDF-PNG-JPG na DOCX*).
+- PDF zabezpieczony hasłem trzeba najpierw odbezpieczyć.
 - Gdy w logu pojawi się komunikat **„nie udało się zlokalizować na
   stronie”**, dane zostały znalezione w tekście, ale nie dało się ich
   wskazać na stronie (np. nietypowe kodowanie czcionki). Sprawdź taki plik

@@ -157,8 +157,21 @@ def anon_pdf(src, dst, enabled, words):
     import pymupdf
 
     doc = pymupdf.open(src)
+    if doc.needs_pass:
+        doc.close()
+        raise ValueError("PDF jest zabezpieczony haslem - zdejmij haslo i sprobuj ponownie")
     stats, missed, has_text = Counter(), 0, False
     for page in doc:
+        # pola formularza (wypelnione wnioski) nie sa czescia tekstu strony
+        for w in page.widgets():
+            v = w.field_value
+            if isinstance(v, str) and v.strip():
+                has_text = True
+                spans = find_spans(v, enabled, words)
+                if spans:
+                    stats.update(s[2] for s in spans)
+                    w.field_value = mask(v, spans)
+                    w.update()
         text = page.get_text()
         has_text = has_text or bool(text.strip())
         found = False
@@ -349,6 +362,22 @@ def selftest():
     txt = out[0].get_text()
     assert "44051401359" not in txt and "Wnioskodawca" in txt, txt
     assert not out.metadata.get("author")
+    out.close()
+
+    # PDF: wypelnione pole formularza
+    pdoc = pymupdf.open()
+    page = pdoc.new_page()
+    w = pymupdf.Widget()
+    w.field_type, w.field_name = pymupdf.PDF_WIDGET_TYPE_TEXT, "pesel"
+    w.rect, w.field_value = pymupdf.Rect(72, 100, 300, 120), "44051401359"
+    page.add_widget(w)
+    pdoc.save(os.path.join(tmp, "f.pdf"))
+    stats, _ = anon_pdf(os.path.join(tmp, "f.pdf"), os.path.join(tmp, "fo.pdf"), None, ())
+    assert stats["PESEL"] == 1, stats
+    out = pymupdf.open(os.path.join(tmp, "fo.pdf"))
+    vals = [x.field_value for x in out[0].widgets()]
+    assert vals == ["***********"], vals
+    assert "44051401359" not in out[0].get_text()
     out.close()
     print("selftest OK")
 
