@@ -1,4 +1,4 @@
-# Anonimizacja RODO (DOCX / PDF)
+# Anonimizacja RODO (DOCX / PDF / skany / zdjęcia)
 
 Program **lokalny** — działa w całości na Twoim komputerze, nigdzie nie wysyła
 dokumentów. Z internetem łączy się tylko po to, żeby sprawdzić
@@ -39,12 +39,19 @@ w okienku „Dodatkowe słowa” (jedno w linii).
   więc układ dokumentu zostaje. Przetwarzane są treść, tabele, nagłówki,
   stopki, przypisy, tekst usunięty w trybie śledzenia zmian oraz adresy
   hiperłączy (np. `mailto:`).
+- **Skany PDF, zdjęcia i skany PNG/JPG** — program odczytuje tekst przez OCR
+  (silnik Tesseract), szuka w nim tych samych danych i **zamalowuje je na
+  czarno w samym obrazie**. Pod prostokątem nie zostaje oryginał, więc danych nie da się odzyskać.
+  - Na skanach zakrywany jest też każdy ciąg 11 cyfr z błędną sumą kontrolną, bo OCR mógł pomylić jedną cyfrę PESEL-u. W logu pojawia się wtedy kategoria **„PESEL (niepewny OCR)”**. Sprawdź, czy nie zakryto np. kwoty.
+  - Zdjęcie jest zapisywane od nowa, wyprostowane, **bez żadnych metadanych**: bez położenia GPS, modelu telefonu, daty, autora i miniatury.
+  - JPG jest zapisywany w jakości 95%, czyli różnicy nie widać.
+  - Skan PDF: strony z tekstem przetwarzane są jak zwykły PDF, a strony bez tekstu przez OCR.
 - **Metadane** (autor, ostatnio modyfikował, tytuł, komentarz) są czyszczone
-  w obu formatach. W DOCX usuwane są też właściwości „Firma”, „Menedżer”
+  we wszystkich formatach. W DOCX usuwane są też właściwości „Firma”, „Menedżer”
   i właściwości niestandardowe.
 
 Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
-`nazwa_anonim.docx`. Oryginał nie jest zmieniany.
+`nazwa_anonim.docx` / `nazwa_anonim.jpg` / `nazwa_anonim.png`. Oryginał nie jest zmieniany.
 
 ## Instalacja (jednorazowo)
 
@@ -57,6 +64,7 @@ Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
    np. do `C:\Programy\Anonimizacja RODO`. Nie uruchamiaj programu z wnętrza ZIP-a.
 3. Kliknij dwukrotnie **`install.bat`**. Instaluje biblioteki `PyMuPDF` i `python-docx` (potrzebny internet) i uruchamia test. Na końcu pojawia się
    **„selftest OK”**, co znaczy, że wszystko działa.
+   Instalator dokłada też silnik OCR **Tesseract** (przez `winget`, może pojawić się okno UAC). Jest potrzebny tylko do skanów i zdjęć. Bez niego DOCX i PDF z tekstem działają normalnie. Model języka polskiego jest już w programie (`tessdata/`).
    Jeśli Windows pokaże „System Windows ochronił ten komputer”, kliknij
    **Więcej informacji → Uruchom mimo to**.
 4. Program uruchamia się plikiem **`uruchom.bat`**. Wygodnie jest zrobić
@@ -67,7 +75,7 @@ Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
 
 1. Uruchom `uruchom.bat`.
 2. **Plik lub folder** — przycisk **Plik…** wskazuje jeden dokument,
-   **Folder…** cały folder z plikami DOCX i PDF. Domyślnie jest to `INPUT`.
+   **Folder…** cały folder z plikami DOCX, PDF, PNG i JPG. Domyślnie jest to `INPUT`.
 3. **Folder wyjściowy** — tu trafią wyniki (domyślnie `OUTPUT`).
 4. **Co usuwać** — odznacz kategorie, które mają zostać, np. NIP firmy
    w umowie publikowanej w BIP.
@@ -100,8 +108,12 @@ o to poprosi, uruchom też raz `install.bat` (zmieniły się biblioteki).
 
 ## Ograniczenia
 
-- **Skany PDF bez warstwy tekstowej** nie są obsługiwane, program zgłosi
-  błąd. Najpierw przepuść je przez OCR (np. program *PDF-PNG-JPG na DOCX*).
+- **Skany i zdjęcia — OCR nie jest nieomylny. Wynik zawsze obejrzyj.**
+  - **Pismo odręczne nie jest rozpoznawane.** PESEL wpisany długopisem w formularzu zostanie na obrazie, więc zakryj go ręcznie.
+  - **Jasny tekst na ciemnym tle** (np. firmowy pasek w stopce) często nie jest odczytywany.
+  - Słaby, krzywy albo bardzo mały skan może zgubić cyfry. Wtedy pomaga skan w 300 DPI.
+  - Nazwisko z listy słów musi zostać odczytane dokładnie. „Sąd” nie zakryje „Sądu”, więc wpisz obie formy.
+  - Jeden plik zajmuje ok. 1,5 s na stronę.
 - PDF zabezpieczony hasłem trzeba najpierw odbezpieczyć.
 - Gdy w logu pojawi się komunikat **„nie udało się zlokalizować na
   stronie”**, dane zostały znalezione w tekście, ale nie dało się ich
@@ -120,4 +132,7 @@ python anonimizacja.py --selftest
 
 Test sprawdza sumy kontrolne, wykrywanie wszystkich kategorii, PESEL
 rozcięty na dwa fragmenty formatowania w DOCX, stopkę, metadane oraz to,
-czy tekst rzeczywiście znika z PDF (a nie jest tylko zakryty).
+czy tekst rzeczywiście znika z PDF (a nie jest tylko zakryty). Przy
+zainstalowanym Tesseracie sprawdza też zdjęcie zapisane bokiem z EXIF
+(obrót, brak metadanych po zapisie) i obrócony skan PDF: po anonimizacji
+ponowny OCR nie może znaleźć PESEL-u ani nazwiska.

@@ -17,5 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Tesseract OCR (silnik; model polski jest w repo w tessdata/)
+        run: choco install tesseract --no-progress -y
       - run: python -m pip install -r requirements.txt
       - run: python anonimizacja.py --selftest

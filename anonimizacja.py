@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Anonimizacja RODO. Wyszukuje dane osobowe w DOCX i PDF (PESEL, NIP, REGON,
-nr dowodu, IBAN, e-mail, telefon + wlasna lista slow) i trwale je usuwa:
-w PDF tekst jest wycinany z pliku (nie tylko zakrywany), w DOCX zamieniany
-na gwiazdki. Czysci tez metadane (autor itp.).
+"""Anonimizacja RODO. Wyszukuje dane osobowe w DOCX, PDF, skanach i zdjeciach
+PNG/JPG (PESEL, NIP, REGON, nr dowodu, IBAN, e-mail, telefon + wlasna lista
+slow) i trwale je usuwa: w PDF tekst jest wycinany z pliku (nie tylko
+zakrywany), w DOCX zamieniany na gwiazdki, na skanach i zdjeciach (OCR,
+Tesseract) zamalowywany na czarno w pikselach. Czysci tez metadane (autor,
+GPS ze zdjec itp.).
 
 Uruchomienie: python anonimizacja.py            (GUI)
               python anonimizacja.py --selftest (test logiki)
 """
+import csv
+import io
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -18,6 +24,11 @@ if getattr(sys, "frozen", False):
     APP_DIR = os.path.dirname(sys.executable)
 else:
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# wlasny model polski (tessdata_best) - Tesseract z instalatora ma tylko angielski
+TESSDATA_DIR = os.path.join(APP_DIR, "tessdata")
+OCR_DPI = 300
+IMAGE_EXTS = (".png", ".jpg", ".jpeg")
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ------------------------------------------------------------ walidatory ----
 
@@ -82,22 +93,26 @@ DETECTORS = [
      r"|(?:\+48|0048) ?\d{9}(?!\d)", None),
 ]
 CATEGORIES = list(dict.fromkeys(name for name, _, _ in DETECTORS))
+# OCR potrafi pomylic jedna cyfre i wtedy suma kontrolna sie nie zgadza -
+# na skanach lepiej zakryc za duzo niz przepuscic PESEL
+OCR_EXTRA = [("PESEL (niepewny OCR)", r"(?<![\d-])\d{11}(?![\d-])", None)]
 # Word i PDF-y uzywaja twardych spacji i roznych dywizow - znak na znak
 # (dlugosc tekstu bez zmian, wiec pozycje trafien pasuja do oryginalu)
 NORMALIZE = str.maketrans("   ­‐‑‒–−",
                           "   ------")
 
 
-def find_spans(text, enabled=None, words=()):
-    """Zwraca [(start, koniec, kategoria)] bez nakladania, posortowane."""
+def find_spans(text, enabled=None, words=(), ocr=False):
+    """Zwraca [(start, koniec, kategoria)] bez nakladania, posortowane.
+    ocr=True: tekst z OCR - dodatkowo ciagi 11 cyfr z bledna suma kontrolna."""
     text = text.translate(NORMALIZE)
     taken = []
 
     def free(a, b):
         return all(b <= x or a >= y for x, y, _ in taken)
 
-    for name, rx, check in DETECTORS:
-        if enabled is not None and name not in enabled:
+    for name, rx, check in DETECTORS + (OCR_EXTRA if ocr else []):
+        if enabled is not None and name.split(" (")[0] not in enabled:
             continue
         for m in re.finditer(rx, text):
             if (check is None or check(m.group())) and free(m.start(), m.end()):
@@ -117,6 +132,70 @@ def mask(text, spans):
             if not chars[i].isspace():
                 chars[i] = "*"
     return "".join(chars)
+
+
+# ------------------------------------------------------------------- OCR ----
+
+
+def find_tesseract():
+    """Silnik OCR (Tesseract) albo None. Instalator bez praw administratora
+    wrzuca go do folderu uzytkownika, stad kilka lokalizacji."""
+    local = os.environ.get("LOCALAPPDATA", "")
+    for cand in (shutil.which("tesseract"),
+                 r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                 r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                 os.path.join(local, "Programs", "Tesseract-OCR", "tesseract.exe"),
+                 os.path.join(local, "Tesseract-OCR", "tesseract.exe")):
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def ocr_hits(png_bytes, enabled, words):
+    """OCR obrazu -> [(kategoria, [prostokaty w pikselach])] dla znalezionych danych."""
+    tess = find_tesseract()
+    if not tess:
+        raise ValueError("skan/zdjecie wymaga silnika OCR (Tesseract) - uruchom install.bat")
+    # TESSDATA_PREFIX, nie --tessdata-dir (w Tesseract 5 psuje config 'tsv')
+    out = subprocess.run([tess, "-", "-", "-l", "pol", "--dpi", str(OCR_DPI), "tsv"],
+                         input=png_bytes, capture_output=True, check=True,
+                         env={**os.environ, "TESSDATA_PREFIX": TESSDATA_DIR},
+                         creationflags=NO_WINDOW).stdout.decode("utf8")
+    paras = {}
+    for r in csv.DictReader(io.StringIO(out), delimiter="\t", quoting=csv.QUOTE_NONE):
+        if r["level"] == "5" and r["text"].strip():
+            x, y, w, h = (int(r[k]) for k in ("left", "top", "width", "height"))
+            pad = max(2, h // 6)  # brzegi liter nie moga wystawac spod prostokata
+            paras.setdefault((r["page_num"], r["block_num"], r["par_num"]), []).append(
+                (r["text"], (x - pad, y - pad, x + w + pad, y + h + pad)))
+    hits = []
+    # caly akapit naraz: IBAN czy telefon bywa przelamany miedzy liniami
+    for ws in paras.values():
+        text, starts = "", []
+        for t, _ in ws:
+            starts.append(len(text))
+            text += t + " "
+        for a, b, cat in find_spans(text, enabled, words, ocr=True):
+            hits.append((cat, [box for (t, box), s in zip(ws, starts) if s < b and s + len(t) > a]))
+    return hits
+
+
+def anon_image(src, dst, enabled, words):
+    import pymupdf
+
+    with pymupdf.open(src) as doc:  # obraz otwiera sie juz obrocony wg EXIF
+        page = doc[0]
+        orig = pymupdf.Pixmap(src)
+        zoom = max(orig.width, orig.height) / max(page.rect.width, page.rect.height)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+    hits = ocr_hits(pix.tobytes("png"), enabled, words)
+    for _, boxes in hits:
+        for b in boxes:
+            pix.set_rect(pymupdf.IRect(b) & pix.irect, (0, 0, 0))
+    pix.set_dpi(orig.xres, orig.yres)
+    # zapis od nowa z samych pikseli: bez EXIF (GPS, aparat, data), XMP i miniatury
+    pix.save(dst, jpg_quality=95)
+    return Counter(c for c, _ in hits), 0
 
 
 # ------------------------------------------------------------------ DOCX ----
@@ -191,8 +270,18 @@ def anon_pdf(src, dst, enabled, words):
                     w.field_value = mask(v, spans)
                     w.update()
         text = page.get_text()
-        has_text = has_text or bool(text.strip())
         found = False
+        if not text.strip() and page.get_images():  # strona skanu - OCR
+            has_text = True
+            # piksele OCR -> wspolrzedne strony (takze strony obroconej)
+            to_page = ~(page.rotation_matrix * pymupdf.Matrix(OCR_DPI / 72, OCR_DPI / 72))
+            png = page.get_pixmap(dpi=OCR_DPI).tobytes("png")
+            for cat, boxes in ocr_hits(png, enabled, words):
+                for b in boxes:
+                    page.add_redact_annot(pymupdf.Rect(b) * to_page, fill=(0, 0, 0))
+                stats[cat] += 1
+                found = True
+        has_text = has_text or bool(text.strip())
         for a, b, cat in find_spans(text, enabled, words):
             frag = text[a:b]
             rects = []
@@ -211,7 +300,7 @@ def anon_pdf(src, dst, enabled, words):
             page.apply_redactions()  # wycina tekst (i piksele obrazow) spod prostokatow
     if not has_text:
         doc.close()
-        raise ValueError("PDF nie ma warstwy tekstowej (skan) - najpierw przepusc go przez OCR")
+        raise ValueError("PDF nie ma tekstu ani obrazow - nie ma czego anonimizowac")
     doc.set_metadata({})
     doc.del_xml_metadata()
     doc.save(dst, garbage=4, deflate=True)
@@ -221,7 +310,7 @@ def anon_pdf(src, dst, enabled, words):
 
 # ------------------------------------------------------------------ wsad ----
 
-HANDLERS = {".docx": anon_docx, ".pdf": anon_pdf}
+HANDLERS = {".docx": anon_docx, ".pdf": anon_pdf, **{e: anon_image for e in IMAGE_EXTS}}
 
 
 def run_batch(inp, out_dir, enabled, words, log=print):
@@ -231,7 +320,7 @@ def run_batch(inp, out_dir, enabled, words, log=print):
         files = sorted(os.path.join(inp, f) for f in os.listdir(inp)
                        if os.path.splitext(f)[1].lower() in HANDLERS)
     if not files:
-        log("Brak plikow DOCX/PDF w: %s" % inp)
+        log("Brak plikow DOCX/PDF/PNG/JPG w: %s" % inp)
         return
     os.makedirs(out_dir, exist_ok=True)
     for f in files:
@@ -245,6 +334,9 @@ def run_batch(inp, out_dir, enabled, words, log=print):
             if missed:
                 log("  UWAGA: %d znalezionych danych nie udalo sie zlokalizowac na stronie"
                     " - sprawdz plik recznie!" % missed)
+            if any(k.endswith("(niepewny OCR)") for k in stats):
+                log("  UWAGA: zakryto tez 11 cyfr z bledna suma (mozliwy blad OCR w PESEL)"
+                    " - sprawdz wynik")
             log("  OK -> %s" % dst)
         except Exception:
             log("BLAD: %s\n%s" % (os.path.basename(f), traceback.format_exc()))
@@ -259,7 +351,7 @@ def gui():
     from tkinter import filedialog, ttk, scrolledtext
 
     root = tk.Tk()
-    root.title("Anonimizacja RODO (DOCX / PDF)")
+    root.title("Anonimizacja RODO (DOCX / PDF / PNG / JPG)")
     root.geometry("780x620")
     pad = dict(padx=6, pady=3)
 
@@ -272,7 +364,8 @@ def gui():
     ttk.Label(f, text="Plik lub folder:").grid(row=0, column=0, sticky="w", **pad)
     ttk.Entry(f, textvariable=v_in, width=60).grid(row=0, column=1, **pad)
     ttk.Button(f, text="Plik...", command=lambda: v_in.set(filedialog.askopenfilename(
-        filetypes=[("DOCX / PDF", "*.docx *.pdf")]) or v_in.get())).grid(row=0, column=2, **pad)
+        filetypes=[("DOCX / PDF / PNG / JPG", "*.docx *.pdf *.png *.jpg *.jpeg")]) or v_in.get())
+               ).grid(row=0, column=2, **pad)
     ttk.Button(f, text="Folder...", command=lambda: v_in.set(
         filedialog.askdirectory() or v_in.get())).grid(row=0, column=3, **pad)
     ttk.Label(f, text="Folder wyjsciowy:").grid(row=1, column=0, sticky="w", **pad)
@@ -419,9 +512,67 @@ def selftest():
     assert vals == ["***********"], vals
     assert "44051401359" not in out[0].get_text()
     out.close()
+
+    # OCR: PESEL z bledna suma tylko w tekscie z OCR
+    assert find_spans("nr 44051401358") == []
+    assert [s[2] for s in find_spans("nr 44051401358", {"PESEL"}, (), ocr=True)] == [
+        "PESEL (niepewny OCR)"]
+    assert find_spans("nr 44051401358", {"NIP"}, (), ocr=True) == []
+    if find_tesseract():
+        selftest_ocr(tmp)
+    elif os.environ.get("CI"):
+        raise AssertionError("CI: brak Tesseracta")
+    else:
+        print("UWAGA: brak Tesseracta - test skanow i zdjec pominiety")
     import aktualizacja
     aktualizacja.selftest()
     print("selftest OK")
+
+
+def selftest_ocr(tmp):
+    import pymupdf
+
+    def scan_pix(rot=0):
+        d = pymupdf.open()
+        p = d.new_page(width=500, height=200)
+        p.insert_text((20, 60), "Wnioskodawca Jan Kowalski", fontsize=20)
+        p.insert_text((20, 110), "PESEL 44051401359", fontsize=20)
+        p.insert_text((20, 160), "Sygnatura 4321", fontsize=20)
+        return p.get_pixmap(matrix=pymupdf.Matrix(3, 3).prerotate(rot))
+
+    def ocr_text(png):
+        found = ocr_hits(png, None, ["Wnioskodawca", "Sygnatura", "Kowalski"])
+        return Counter(c for c, _ in found)
+
+    # zdjecie z telefonu: zapisane bokiem + EXIF (obrot 6 i pole Artist)
+    jpg = scan_pix(rot=-90).tobytes("jpg")
+    exif = (b"Exif\x00\x00MM\x00\x2a\x00\x00\x00\x08\x00\x02"
+            b"\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00"
+            b"\x01\x3b\x00\x02\x00\x00\x00\x04KOW\x00\x00\x00\x00\x00")
+    src = os.path.join(tmp, "foto.jpg")
+    with open(src, "wb") as f:
+        f.write(jpg[:2] + b"\xff\xe1" + (len(exif) + 2).to_bytes(2, "big") + exif + jpg[2:])
+    stats, _ = anon_image(src, os.path.join(tmp, "foto_o.jpg"), None, ["Kowalski"])
+    assert stats == Counter({"PESEL": 1, "Lista słów": 1}), stats
+    raw = open(os.path.join(tmp, "foto_o.jpg"), "rb").read()
+    assert b"Exif" not in raw and b"KOW" not in raw, "metadane zdjecia zostaly"
+    # po anonimizacji OCR nie moze juz znalezc danych, a reszta tekstu zostaje
+    with pymupdf.open(os.path.join(tmp, "foto_o.jpg")) as d:
+        left = ocr_text(d[0].get_pixmap(dpi=OCR_DPI).tobytes("png"))
+    assert left == Counter({"Lista słów": 2}), left  # Wnioskodawca + Sygnatura, prosto
+
+    # skan PDF (strona obrocona o 90 stopni, jak ze skanera)
+    d = pymupdf.open()
+    page = d.new_page(width=200, height=500)  # obraz lezy bokiem, /Rotate go prostuje
+    page.insert_image(page.rect, pixmap=scan_pix(rot=-90))
+    page.set_rotation(90)
+    d.save(os.path.join(tmp, "skan.pdf"))
+    stats, missed = anon_pdf(os.path.join(tmp, "skan.pdf"), os.path.join(tmp, "skan_o.pdf"),
+                             None, ["Kowalski"])
+    assert stats == Counter({"PESEL": 1, "Lista słów": 1}) and not missed, stats
+    with pymupdf.open(os.path.join(tmp, "skan_o.pdf")) as d:
+        left = ocr_text(d[0].get_pixmap(dpi=OCR_DPI).tobytes("png"))
+    assert left == Counter({"Lista słów": 2}), f"skan: dane widoczne po anonimizacji: {left}"
 
 
 if __name__ == "__main__":
