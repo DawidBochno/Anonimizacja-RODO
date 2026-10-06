@@ -28,6 +28,21 @@ if errorlevel 1 (
 )
 
 echo.
+echo === Silnik OCR (Tesseract) - potrzebny tylko do skanow i zdjec ===
+call :findtess
+if not defined TESS (
+    echo Nie znaleziono - instaluje przez winget ^(moze pojawic sie okno UAC^)...
+    winget install --id UB-Mannheim.TesseractOCR -e --accept-package-agreements --accept-source-agreements
+    call :findtess
+)
+if defined TESS (
+    echo OK - %TESS%
+) else (
+    echo UWAGA: brak Tesseracta. DOCX i PDF z tekstem dzialaja, skany i zdjecia nie.
+    echo Instalacja reczna: https://github.com/UB-Mannheim/tesseract/wiki
+)
+
+echo.
 echo === Test ===
 %PY% -c "import pymupdf, docx, tkinter; print('Biblioteki OK')"
 if errorlevel 1 (
@@ -46,3 +61,16 @@ if errorlevel 1 (
 echo.
 echo Gotowe. Program uruchamiasz plikiem uruchom.bat
 pause
+exit /b 0
+
+:findtess
+rem Instalacja bez praw administratora laduje w folderze uzytkownika, nie w Program Files.
+set TESS=
+for /f "delims=" %%p in ('where tesseract 2^>nul') do if not defined TESS set TESS=%%p
+for %%p in (
+    "C:\Program Files\Tesseract-OCR\tesseract.exe"
+    "C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+    "%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"
+    "%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"
+) do if not defined TESS if exist %%p set TESS=%%~p
+exit /b 0
