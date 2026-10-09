@@ -77,13 +77,48 @@ Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
 2. **Plik lub folder** — przycisk **Plik…** wskazuje jeden dokument,
    **Folder…** cały folder z plikami DOCX, PDF, PNG i JPG. Domyślnie jest to `INPUT`.
 3. **Folder wyjściowy** — tu trafią wyniki (domyślnie `OUTPUT`).
-4. **Co usuwać** — odznacz kategorie, które mają zostać, np. NIP firmy
-   w umowie publikowanej w BIP.
+4. **Co szukać** — odznacz kategorie, które mają zostać w całości.
 5. **Dodatkowe słowa** — imiona, nazwiska, adresy, nazwy ulic, po jednym
    w linii. Wielkość liter nie ma znaczenia.
-6. Kliknij **Anonimizuj**. Log pokazuje, co i ile usunięto w każdym pliku.
-7. Wyniki mają w nazwie `_anonim` i leżą w folderze wyjściowym. Oryginały
-   zostają bez zmian. **Zawsze przejrzyj wynik przed publikacją.**
+6. **Frazy do pominięcia** — dane, które mają **zostać** w dokumencie, po
+   jednej w linii, np. NIP, telefon, e-mail i nazwa urzędu albo NIP firmy
+   w umowie publikowanej w BIP. Numer pasuje także w innym zapisie
+   (`123-456-32-18` pominie też `1234563218` i `PL 123 456 32 18`). Słowo
+   z listy słów wewnątrz frazy też zostaje (fraza „Urząd Gminy Kowalewo”
+   chroni „Kowalewo” w nazwie urzędu, ale nie w adresie osoby).
+7. Kliknij **Skanuj (tylko zaznacz)**, żeby najpierw zobaczyć, co program
+   znajdzie. Nic nie jest usuwane: w folderze wyjściowym powstaje kopia
+   `nazwa_skan` z zaznaczonymi danymi:
+   - **DOCX** — żółty marker (formatowanie i metadane bez zmian),
+   - **PDF** — żółte podświetlenie, pola formularza w czerwonej ramce,
+   - **skany i zdjęcia** — czerwone ramki wokół danych.
+
+   ![Wynik skanowania DOCX](docs/skan.png)
+
+   Jeśli coś zaznaczono niepotrzebnie, dopisz to do fraz do pominięcia.
+   Jeśli czegoś brakuje, dopisz to do dodatkowych słów.
+8. Kliknij **Anonimizuj**. Wyniki mają w nazwie `_anonim` i leżą w folderze
+   wyjściowym. Oryginały zostają bez zmian. **Zawsze przejrzyj wynik przed publikacją.**
+
+Po skanowaniu i po anonimizacji log pokazuje **listę znalezionych danych**:
+dla każdego pliku kategorie z liczbą i same wartości (np. `44051401359 (x2)`),
+a na końcu podsumowanie ze wszystkich plików:
+
+```
+Przetwarzam: decyzja.docx
+  Lista słów: 1
+      Anna Nowak
+  PESEL: 1
+      44051401359
+  Telefon: 1
+      600 700 800
+  OK -> C:\Programy\Anonimizacja RODO\OUTPUT\decyzja_anonim.docx
+
+=== Podsumowanie (1 plikow): znaleziono ===
+  ...
+```
+
+Log zawiera znalezione dane osobowe. Nie wklejaj go do e-maila ani zgłoszenia.
 
 Wynik w PDF. Tekst jest wycięty trwale, a nie tylko zakryty, więc nie
 da się go skopiować ani odczytać spod czarnego prostokąta:
@@ -131,7 +166,9 @@ python anonimizacja.py --selftest
 ```
 
 Test sprawdza sumy kontrolne, wykrywanie wszystkich kategorii, PESEL
-rozcięty na dwa fragmenty formatowania w DOCX, stopkę, metadane oraz to,
+rozcięty na dwa fragmenty formatowania w DOCX, tabulator między słowami, stopkę, metadane, frazy do pominięcia
+(także w innym zapisie), skanowanie (marker w DOCX bez zmiany tekstu i formatowania, podświetlenie w PDF,
+ramki na zdjęciu), listę znalezionych danych oraz to,
 czy tekst rzeczywiście znika z PDF (a nie jest tylko zakryty). Przy
 zainstalowanym Tesseracie sprawdza też zdjęcie zapisane bokiem z EXIF
 (obrót, brak metadanych po zapisie) i obrócony skan PDF: po anonimizacji

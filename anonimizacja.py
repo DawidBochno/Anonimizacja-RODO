@@ -6,6 +6,10 @@ zakrywany), w DOCX zamieniany na gwiazdki, na skanach i zdjeciach (OCR,
 Tesseract) zamalowywany na czarno w pikselach. Czysci tez metadane (autor,
 GPS ze zdjec itp.).
 
+Frazy do pominiecia (np. NIP urzedu) zostaja w dokumencie. Skanowanie
+(skan=True) tylko zaznacza dane w kopii _skan, nic nie usuwa. Po kazdym
+przebiegu log wypisuje liste znalezionych danych.
+
 Uruchomienie: python anonimizacja.py            (GUI)
               python anonimizacja.py --selftest (test logiki)
 """
@@ -102,26 +106,59 @@ NORMALIZE = str.maketrans("   ­‐‑‒–−",
                           "   ------")
 
 
-def find_spans(text, enabled=None, words=(), ocr=False):
+def _bez_separatorow(s):
+    return re.sub(r"[\W_]", "", s.translate(NORMALIZE)).lower()
+
+
+def _fraza(w):
+    """Fraza jako regex: cale slowa, dowolne odstepy (PDF lamie linie), bez wielkosci liter."""
+    return r"(?<!\w)%s(?!\w)" % r"\s+".join(map(re.escape, w.split()))
+
+
+def find_spans(text, enabled=None, words=(), ocr=False, ignore=()):
     """Zwraca [(start, koniec, kategoria)] bez nakladania, posortowane.
-    ocr=True: tekst z OCR - dodatkowo ciagi 11 cyfr z bledna suma kontrolna."""
+    ocr=True: tekst z OCR - dodatkowo ciagi 11 cyfr z bledna suma kontrolna.
+    ignore: frazy do pominiecia (np. NIP urzedu) - fragmenty tekstu z ta fraza
+    i trafienia rowne frazie po usunieciu separatorow nie sa zwracane."""
     text = text.translate(NORMALIZE)
     taken = []
+    ignore = {w.strip() for w in ignore if w.strip()}
+    pomin = {_bez_separatorow(w) for w in ignore}
 
     def free(a, b):
         return all(b <= x or a >= y for x, y, _ in taken)
 
+    # frazy pominiete zajmuja tekst pierwsze - zaden wzorzec nie wejdzie w ich srodek
+    for w in ignore:
+        for m in re.finditer(_fraza(w), text, re.I):
+            if free(m.start(), m.end()):
+                taken.append((m.start(), m.end(), None))
     for name, rx, check in DETECTORS + (OCR_EXTRA if ocr else []):
         if enabled is not None and name.split(" (")[0] not in enabled:
             continue
         for m in re.finditer(rx, text):
             if (check is None or check(m.group())) and free(m.start(), m.end()):
-                taken.append((m.start(), m.end(), name))
+                # ten sam numer zapisany inaczej (123-456-32-18 / 1234563218)
+                pominiety = _bez_separatorow(m.group()) in pomin
+                taken.append((m.start(), m.end(), None if pominiety else name))
     for w in sorted({w.strip() for w in words if w.strip()}, key=len, reverse=True):
-        for m in re.finditer(r"(?<!\w)%s(?!\w)" % re.escape(w), text, re.I):
+        for m in re.finditer(_fraza(w), text, re.I):
             if free(m.start(), m.end()):
                 taken.append((m.start(), m.end(), "Lista słów"))
-    return sorted(taken)
+    return sorted(t for t in taken if t[2])
+
+
+def znalezione(text, spans):
+    """[(kategoria, tekst)] do raportu - odstepy i przelamania linii scalone."""
+    return [(c, " ".join(text[a:b].split())) for a, b, c in spans]
+
+
+def kategorie(found):
+    """Counter((kategoria, tekst)) -> Counter(kategoria)."""
+    out = Counter()
+    for (c, _), n in found.items():
+        out[c] += n
+    return out
 
 
 def mask(text, spans):
@@ -151,8 +188,8 @@ def find_tesseract():
     return None
 
 
-def ocr_hits(png_bytes, enabled, words):
-    """OCR obrazu -> [(kategoria, [prostokaty w pikselach])] dla znalezionych danych."""
+def ocr_hits(png_bytes, enabled, words, ignore=()):
+    """OCR obrazu -> [(kategoria, tekst, [prostokaty w pikselach])] dla znalezionych danych."""
     tess = find_tesseract()
     if not tess:
         raise ValueError("skan/zdjecie wymaga silnika OCR (Tesseract) - uruchom install.bat")
@@ -175,12 +212,22 @@ def ocr_hits(png_bytes, enabled, words):
         for t, _ in ws:
             starts.append(len(text))
             text += t + " "
-        for a, b, cat in find_spans(text, enabled, words, ocr=True):
-            hits.append((cat, [box for (t, box), s in zip(ws, starts) if s < b and s + len(t) > a]))
+        for a, b, cat in find_spans(text, enabled, words, ocr=True, ignore=ignore):
+            hits.append((cat, " ".join(text[a:b].split()),
+                         [box for (t, box), s in zip(ws, starts) if s < b and s + len(t) > a]))
     return hits
 
 
-def anon_image(src, dst, enabled, words):
+def ramka(pix, b, kolor=(255, 0, 0), grubosc=3):
+    """Skanowanie: czerwona ramka wokol prostokata (tresc pod spodem zostaje)."""
+    import pymupdf
+    x0, y0, x1, y1 = b
+    g = grubosc
+    for r in ((x0, y0, x1, y0 + g), (x0, y1 - g, x1, y1), (x0, y0, x0 + g, y1), (x1 - g, y0, x1, y1)):
+        pix.set_rect(pymupdf.IRect(r) & pix.irect, kolor)
+
+
+def anon_image(src, dst, enabled, words, ignore=(), skan=False):
     import pymupdf
 
     with pymupdf.open(src) as doc:  # obraz otwiera sie juz obrocony wg EXIF
@@ -188,20 +235,65 @@ def anon_image(src, dst, enabled, words):
         orig = pymupdf.Pixmap(src)
         zoom = max(orig.width, orig.height) / max(page.rect.width, page.rect.height)
         pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-    hits = ocr_hits(pix.tobytes("png"), enabled, words)
-    for _, boxes in hits:
+    hits = ocr_hits(pix.tobytes("png"), enabled, words, ignore)
+    for _, _, boxes in hits:
         for b in boxes:
-            pix.set_rect(pymupdf.IRect(b) & pix.irect, (0, 0, 0))
+            if skan:
+                ramka(pix, b)
+            else:
+                pix.set_rect(pymupdf.IRect(b) & pix.irect, (0, 0, 0))
     pix.set_dpi(orig.xres, orig.yres)
     # zapis od nowa z samych pikseli: bez EXIF (GPS, aparat, data), XMP i miniatury
     pix.save(dst, jpg_quality=95)
-    return Counter(c for c, _ in hits), 0
+    return Counter((c, t) for c, t, _ in hits), 0
 
 
 # ------------------------------------------------------------------ DOCX ----
 
 
-def anon_docx(src, dst, enabled, words):
+def zaznacz_docx(t, segmenty):
+    """Skanowanie: dzieli run z tekstem t na runy wg [(tekst, zaznaczony)],
+    zaznaczone dostaja zolty marker. Formatowanie runu zostaje."""
+    import copy
+    from docx.enum.text import WD_COLOR_INDEX
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.text.run import Run
+
+    r = t.getparent()
+    if r.tag != qn("w:r"):
+        return
+    rpr = r.find(qn("w:rPr"))
+
+    def nowy_run():
+        nr = OxmlElement("w:r")
+        if rpr is not None:
+            nr.append(copy.deepcopy(rpr))
+        return nr
+
+    nowe = []
+    for tekst, zaznaczony in segmenty:
+        nr = nowy_run()
+        nt = OxmlElement("w:t")
+        nt.text = tekst
+        nt.set(qn("xml:space"), "preserve")
+        nr.append(nt)
+        if zaznaczony:
+            Run(nr, None).font.highlight_color = WD_COLOR_INDEX.YELLOW
+        nowe.append(nr)
+    po = list(t.itersiblings())  # np. tabulator za tekstem - zostaje za nim
+    if po:
+        nr = nowy_run()
+        nr.extend(po)
+        nowe.append(nr)
+    r.remove(t)
+    for n in reversed(nowe):
+        r.addnext(n)
+    if all(c.tag == qn("w:rPr") for c in r):
+        r.getparent().remove(r)
+
+
+def anon_docx(src, dst, enabled, words, ignore=(), skan=False):
     import docx
     from docx.oxml.ns import qn
 
@@ -209,31 +301,52 @@ def anon_docx(src, dst, enabled, words):
     parts = [doc.part] + [r.target_part for r in doc.part.rels.values()
                           if r.reltype.endswith(("/header", "/footer",
                                                  "/footnotes", "/endnotes"))]
-    stats = Counter()
+    found = Counter()
     # delText = usuniete w trybie sledzenia zmian, instrText = pole HYPERLINK "mailto:..."
     tags = (qn("w:t"), qn("w:delText"), qn("w:instrText"))
+    breaks = (qn("w:tab"), qn("w:br"), qn("w:cr"))
     for part in parts:
         # adres hiperlacza (mailto:...) siedzi w .rels, poza tekstem akapitu
         for r in part.rels.values():
             if r.is_external:
-                spans = find_spans(r.target_ref, enabled, words)
+                spans = find_spans(r.target_ref, enabled, words, ignore=ignore)
                 if spans:
-                    stats.update(s[2] for s in spans)
-                    r._target = mask(r.target_ref, spans)
+                    found.update(znalezione(r.target_ref, spans))
+                    if not skan:
+                        r._target = mask(r.target_ref, spans)
         for p in part.element.iter(qn("w:p")):
-            nodes = [n for n in p.iter(*tags)]
-            text = "".join(n.text or "" for n in nodes)
-            spans = find_spans(text, enabled, words)
+            # tabulator i zlamanie linii w runie = odstep miedzy slowami (inaczej
+            # "Kowalski<tab>koniec" skleja sie w jedno slowo i lista slow go nie widzi);
+            # w:tab w ustawieniach akapitu (pozycje tabulatorow) to nie tekst
+            nodes = [n for n in p.iter(*tags, *breaks) if n.tag in tags or n.getparent().tag == qn("w:r")]
+            texts = [(n.text or "") if n.tag in tags else " " for n in nodes]
+            text = "".join(texts)
+            spans = find_spans(text, enabled, words, ignore=ignore)
             if not spans:
                 continue
-            stats.update(s[2] for s in spans)
+            found.update(znalezione(text, spans))
+            if skan:
+                pos = 0
+                for n, t in zip(nodes, texts):
+                    a, b = pos, pos + len(t)
+                    pos = b
+                    if n.tag != qn("w:t") or not any(x < b and y > a for x, y, _ in spans):
+                        continue
+                    # granice zaznaczen wewnatrz tego fragmentu tekstu
+                    ciecia = sorted({a, b} | {min(max(v, a), b) for x, y, _ in spans for v in (x, y)})
+                    zaznaczone = [any(x <= c < y for x, y, _ in spans) for c in ciecia[:-1]]
+                    zaznacz_docx(n, [(text[c:d], z) for c, d, z in zip(ciecia, ciecia[1:], zaznaczone)])
+                continue
             masked, pos = mask(text, spans), 0
             # tekst akapitu bywa pociety na wiele "runow" - maska ma ta sama
             # dlugosc, wiec kazdy fragment dostaje swoj wycinek
-            for n in nodes:
-                ln = len(n.text or "")
-                n.text = masked[pos:pos + ln]
-                pos += ln
+            for n, t in zip(nodes, texts):
+                if n.tag in tags:
+                    n.text = masked[pos:pos + len(t)]
+                pos += len(t)
+    if skan:  # kopia robocza z zaznaczeniami - metadane bez zmian
+        doc.save(dst)
+        return found, 0
     cp = doc.core_properties
     for attr in ("author", "last_modified_by", "comments", "title",
                  "subject", "keywords", "category"):
@@ -244,13 +357,13 @@ def anon_docx(src, dst, enabled, words):
         if r.reltype.endswith(("/extended-properties", "/custom-properties")):
             del pkg_rels[rid]
     doc.save(dst)
-    return stats, 0
+    return found, 0
 
 
 # ------------------------------------------------------------------- PDF ----
 
 
-def anon_pdf(src, dst, enabled, words):
+def anon_pdf(src, dst, enabled, words, ignore=(), skan=False):
     import pymupdf
 
     doc = pymupdf.open(src)
@@ -258,17 +371,30 @@ def anon_pdf(src, dst, enabled, words):
         doc.close()
         raise ValueError("PDF jest zabezpieczony haslem - zdejmij haslo i sprobuj ponownie")
     stats, missed, has_text = Counter(), 0, False
+    zolty, czerwony = (1, 0.9, 0), (1, 0, 0)
+
+    def ramka_pdf(rect):  # skanowanie: obramowanie, tresc pod spodem zostaje
+        a = page.add_rect_annot(rect)
+        a.set_colors(stroke=czerwony)
+        a.set_border(width=1.5)
+        a.update()
+
     for page in doc:
         # pola formularza (wypelnione wnioski) nie sa czescia tekstu strony
+        pola = []
         for w in page.widgets():
             v = w.field_value
             if isinstance(v, str) and v.strip():
                 has_text = True
-                spans = find_spans(v, enabled, words)
+                pola.append(w.rect)
+                spans = find_spans(v, enabled, words, ignore=ignore)
                 if spans:
-                    stats.update(s[2] for s in spans)
-                    w.field_value = mask(v, spans)
-                    w.update()
+                    stats.update(znalezione(v, spans))
+                    if skan:
+                        ramka_pdf(w.rect)
+                    else:
+                        w.field_value = mask(v, spans)
+                        w.update()
         text = page.get_text()
         found = False
         if not text.strip() and page.get_images():  # strona skanu - OCR
@@ -276,33 +402,45 @@ def anon_pdf(src, dst, enabled, words):
             # piksele OCR -> wspolrzedne strony (takze strony obroconej)
             to_page = ~(page.rotation_matrix * pymupdf.Matrix(OCR_DPI / 72, OCR_DPI / 72))
             png = page.get_pixmap(dpi=OCR_DPI).tobytes("png")
-            for cat, boxes in ocr_hits(png, enabled, words):
+            for cat, frag, boxes in ocr_hits(png, enabled, words, ignore):
                 for b in boxes:
-                    page.add_redact_annot(pymupdf.Rect(b) * to_page, fill=(0, 0, 0))
-                stats[cat] += 1
+                    if skan:
+                        ramka_pdf(pymupdf.Rect(b) * to_page)
+                    else:
+                        page.add_redact_annot(pymupdf.Rect(b) * to_page, fill=(0, 0, 0))
+                stats[cat, frag] += 1
                 found = True
         has_text = has_text or bool(text.strip())
-        for a, b, cat in find_spans(text, enabled, words):
+        spans = find_spans(text, enabled, words, ignore=ignore)
+        for (a, b, cat), (_, opis) in zip(spans, znalezione(text, spans)):
             frag = text[a:b]
             rects = []
             # fragment przelamany miedzy liniami szukamy linia po linii
             for piece in frag.split("\n"):
                 if piece.strip():
                     rects += page.search_for(piece)
+            if rects and any(all(r.intersects(p) for r in rects) for p in pola):
+                continue  # wyglad pola formularza - juz policzone przy polach
             if rects:
-                for r in rects:
-                    page.add_redact_annot(r, fill=(0, 0, 0))
-                stats[cat] += 1
+                if skan:
+                    zaz = page.add_highlight_annot(rects)
+                    zaz.set_colors(stroke=zolty)
+                    zaz.update()
+                else:
+                    for r in rects:
+                        page.add_redact_annot(r, fill=(0, 0, 0))
+                stats[cat, opis] += 1
                 found = True
             else:
                 missed += 1
-        if found:
+        if found and not skan:
             page.apply_redactions()  # wycina tekst (i piksele obrazow) spod prostokatow
     if not has_text:
         doc.close()
         raise ValueError("PDF nie ma tekstu ani obrazow - nie ma czego anonimizowac")
-    doc.set_metadata({})
-    doc.del_xml_metadata()
+    if not skan:  # kopia robocza ze skanowania - metadane bez zmian
+        doc.set_metadata({})
+        doc.del_xml_metadata()
     doc.save(dst, garbage=4, deflate=True)
     doc.close()
     return stats, missed
@@ -313,34 +451,59 @@ def anon_pdf(src, dst, enabled, words):
 HANDLERS = {".docx": anon_docx, ".pdf": anon_pdf, **{e: anon_image for e in IMAGE_EXTS}}
 
 
-def run_batch(inp, out_dir, enabled, words, log=print):
+def raport(found, wciecie="  "):
+    """Linie raportu: kategoria z liczba, pod nia znalezione wartosci."""
+    linie = []
+    for cat, n in sorted(kategorie(found).items()):
+        linie.append("%s%s: %d" % (wciecie, cat, n))
+        for (c, t), k in sorted(found.items()):
+            if c == cat:
+                linie.append("%s    %s%s" % (wciecie, t, " (x%d)" % k if k > 1 else ""))
+    return linie
+
+
+def run_batch(inp, out_dir, enabled, words, log=print, ignore=(), skan=False):
+    """skan=True: kopia z zaznaczeniami (_skan), nic nie jest usuwane.
+    Zwraca Counter((kategoria, tekst)) ze wszystkich plikow."""
     if os.path.isfile(inp):
         files = [inp]
     else:
         files = sorted(os.path.join(inp, f) for f in os.listdir(inp)
                        if os.path.splitext(f)[1].lower() in HANDLERS)
+    razem = Counter()
     if not files:
         log("Brak plikow DOCX/PDF/PNG/JPG w: %s" % inp)
-        return
+        return razem
     os.makedirs(out_dir, exist_ok=True)
     for f in files:
         name, ext = os.path.splitext(os.path.basename(f))
-        dst = os.path.join(out_dir, name + "_anonim" + ext.lower())
-        log("Przetwarzam: %s" % os.path.basename(f))
+        dst = os.path.join(out_dir, name + ("_skan" if skan else "_anonim") + ext.lower())
+        log("%s: %s" % ("Skanuje" if skan else "Przetwarzam", os.path.basename(f)))
         try:
-            stats, missed = HANDLERS[ext.lower()](f, dst, enabled, words)
-            summary = ", ".join("%s: %d" % kv for kv in sorted(stats.items())) or "nic nie znaleziono"
-            log("  %s" % summary)
+            found, missed = HANDLERS[ext.lower()](f, dst, enabled, words, ignore=ignore, skan=skan)
+            razem.update(found)
+            for linia in raport(found) or ["  nic nie znaleziono"]:
+                log(linia)
             if missed:
                 log("  UWAGA: %d znalezionych danych nie udalo sie zlokalizowac na stronie"
                     " - sprawdz plik recznie!" % missed)
-            if any(k.endswith("(niepewny OCR)") for k in stats):
-                log("  UWAGA: zakryto tez 11 cyfr z bledna suma (mozliwy blad OCR w PESEL)"
-                    " - sprawdz wynik")
+            if any(c.endswith("(niepewny OCR)") for c, _ in found):
+                log("  UWAGA: %s tez 11 cyfr z bledna suma (mozliwy blad OCR w PESEL)"
+                    " - sprawdz wynik" % ("zaznaczono" if skan else "zakryto"))
             log("  OK -> %s" % dst)
         except Exception:
             log("BLAD: %s\n%s" % (os.path.basename(f), traceback.format_exc()))
-    log("Zakonczono (%d plikow). Zawsze przejrzyj wynik przed publikacja." % len(files))
+    log("")
+    log("=== Podsumowanie (%d plikow): %s ===" % (
+        len(files), "znaleziono" if razem else "nic nie znaleziono"))
+    for linia in raport(razem):
+        log(linia)
+    if skan:
+        log("Skanowanie: dane zaznaczone w kopiach _skan, nic nie usunieto. Dopisz frazy do pominiecia"
+            " albo slowa i kliknij Anonimizuj.")
+    else:
+        log("Zakonczono. Zawsze przejrzyj wynik przed publikacja.")
+    return razem
 
 
 # -------------------------------------------------------------------- GUI ----
@@ -352,7 +515,7 @@ def gui():
 
     root = tk.Tk()
     root.title("Anonimizacja RODO (DOCX / PDF / PNG / JPG)")
-    root.geometry("780x620")
+    root.geometry("780x720")
     pad = dict(padx=6, pady=3)
 
     v_in = tk.StringVar(value=os.path.join(APP_DIR, "INPUT"))
@@ -373,15 +536,21 @@ def gui():
     ttk.Button(f, text="Wybierz...", command=lambda: v_out.set(
         filedialog.askdirectory() or v_out.get())).grid(row=1, column=2, **pad)
 
-    g = ttk.LabelFrame(root, text="Co usuwac")
+    g = ttk.LabelFrame(root, text="Co szukac")
     g.pack(fill="x", **pad)
     for i, c in enumerate(CATEGORIES):
         ttk.Checkbutton(g, text=c, variable=v_cats[c]).grid(row=0, column=i, sticky="w", **pad)
 
     h = ttk.LabelFrame(root, text="Dodatkowe slowa do usuniecia (imiona, nazwiska, adresy) - jedno w linii")
     h.pack(fill="x", **pad)
-    words_box = tk.Text(h, height=5)
+    words_box = tk.Text(h, height=4)
     words_box.pack(fill="x", **pad)
+
+    h2 = ttk.LabelFrame(root, text="Frazy do pominiecia - zostaja w dokumencie (np. NIP, telefon, e-mail urzedu) "
+                                   "- jedna w linii")
+    h2.pack(fill="x", **pad)
+    ignore_box = tk.Text(h2, height=3)
+    ignore_box.pack(fill="x", **pad)
 
     log_box = scrolledtext.ScrolledText(root, height=14)
     log_box.pack(fill="both", expand=True, **pad)
@@ -392,10 +561,14 @@ def gui():
             log_box.see("end")
         root.after(0, put)
 
-    btn = ttk.Button(root, text="Anonimizuj")
-    btn.pack(pady=6)
+    b = ttk.Frame(root)
+    b.pack(pady=6)
+    btn_skan = ttk.Button(b, text="Skanuj (tylko zaznacz)")
+    btn_skan.pack(side="left", padx=6)
+    btn = ttk.Button(b, text="Anonimizuj")
+    btn.pack(side="left", padx=6)
 
-    def start():
+    def start(skan):
         inp, out = v_in.get().strip('" '), v_out.get().strip('" ')
         if not os.path.exists(inp):
             return log("Wskaz istniejacy plik lub folder.")
@@ -403,18 +576,21 @@ def gui():
             return log("Wskaz folder wyjsciowy.")
         enabled = {c for c, v in v_cats.items() if v.get()}
         words = words_box.get("1.0", "end").splitlines()
-        btn.config(state="disabled")
+        ignore = ignore_box.get("1.0", "end").splitlines()
+        for x in (btn, btn_skan):
+            x.config(state="disabled")
         log_box.delete("1.0", "end")
 
         def work():
             try:
-                run_batch(inp, out, enabled, words, log)
+                run_batch(inp, out, enabled, words, log, ignore=ignore, skan=skan)
             finally:
-                root.after(0, lambda: btn.config(state="normal"))
+                root.after(0, lambda: [x.config(state="normal") for x in (btn, btn_skan)])
 
         threading.Thread(target=work, daemon=True).start()
 
-    btn.config(command=start)
+    btn.config(command=lambda: start(False))
+    btn_skan.config(command=lambda: start(True))
     if "--selftest" in sys.argv:
         root.after(200, root.destroy)
     import aktualizacja
@@ -453,6 +629,18 @@ def selftest():
     t2 = "NIP 123­456­32­18, tel. 600 100 200, 123‑456‑32‑18"
     assert [s[2] for s in find_spans(t2)] == ["NIP", "Telefon", "NIP"], find_spans(t2)
 
+    # frazy do pominiecia: dane urzedu zostaja, takze w innym zapisie i w srodku frazy
+    t3 = ("Urząd Gminy Kowalewo, NIP 123-456-32-18, sekretariat@urzad.gov.pl; wnioskodawca "
+          "Jan Kowalski, jan@x.pl, ul. Kowalewo 5, NIP 1234563218")
+    ign = ["1234563218", "SEKRETARIAT@urzad.gov.pl", "Urząd  Gminy Kowalewo", " "]
+    spans = find_spans(t3, None, ["Kowalewo", "Jan Kowalski"], ignore=ign)
+    assert znalezione(t3, spans) == [("Lista słów", "Jan Kowalski"), ("E-mail", "jan@x.pl"),
+                                     ("Lista słów", "Kowalewo")], znalezione(t3, spans)
+    assert [s[2] for s in find_spans("tel. 600 700 800", ignore=["600"])] == []  # fraza w srodku numeru
+    assert znalezione("PESEL 4405\n1401359", [(6, 18, "PESEL")]) == [("PESEL", "4405 1401359")]
+    assert raport(Counter({("PESEL", "44051401359"): 2, ("E-mail", "a@b.pl"): 1})) == [
+        "  E-mail: 1", "      a@b.pl", "  PESEL: 2", "      44051401359 (x2)"]
+
     tmp = tempfile.mkdtemp()
     # DOCX: PESEL pociety na dwa runy + stopka
     d = docx.Document()
@@ -484,13 +672,47 @@ def selftest():
     assert "a@b.pl" not in o.sections[0].footer.paragraphs[0].text
     assert o.core_properties.author == ""
 
+    # DOCX skanowanie: tekst bez zmian, dane na zolto (takze pociete na runy), metadane zostaja
+    d = docx.Document()
+    p = d.add_paragraph("PESEL: 4405")
+    p.add_run("1401359 i Jan ").bold = True
+    r = p.add_run("Kowalski")
+    r.add_tab()
+    r.add_text("koniec")
+    d.add_paragraph("NIP urzedu 123-456-32-18")
+    d.core_properties.author = "Jan Kowalski"
+    d.save(src)
+    found, _ = anon_docx(src, os.path.join(tmp, "s.docx"), None, ["Jan Kowalski"],
+                         ignore=["123-456-32-18"], skan=True)
+    assert found == Counter({("PESEL", "44051401359"): 1, ("Lista słów", "Jan Kowalski"): 1}), found
+    o = docx.Document(os.path.join(tmp, "s.docx"))
+    p = o.paragraphs[0]
+    assert p.text == "PESEL: 44051401359 i Jan Kowalski\tkoniec", repr(p.text)
+    assert [r.text for r in p.runs if r.font.highlight_color] == ["4405", "1401359", "Jan ", "Kowalski"]
+    assert [r.text for r in p.runs if r.bold] == ["1401359", " i ", "Jan "]
+    assert not any(r.font.highlight_color for r in o.paragraphs[1].runs)
+    assert o.core_properties.author == "Jan Kowalski"
+    # anonimizacja z fraza do pominiecia
+    anon_docx(src, os.path.join(tmp, "o2.docx"), None, ["Kowalski"], ignore=["1234563218"])
+    o = docx.Document(os.path.join(tmp, "o2.docx"))
+    assert o.paragraphs[1].text == "NIP urzedu 123-456-32-18"
+    assert o.paragraphs[0].text == "PESEL: *********** i Jan ********	koniec", repr(o.paragraphs[0].text)
+
     # PDF: tekst ma faktycznie zniknac z pliku
     pdoc = pymupdf.open()
     pdoc.new_page().insert_text((72, 72), "Wnioskodawca PESEL 44051401359 zostaje")
     pdoc.set_metadata({"author": "Jan Kowalski"})
     pdoc.save(os.path.join(tmp, "t.pdf"))
+    # skanowanie: podswietlenie, tekst i metadane zostaja
+    stats, missed = anon_pdf(os.path.join(tmp, "t.pdf"), os.path.join(tmp, "s.pdf"), None, (), skan=True)
+    assert stats == Counter({("PESEL", "44051401359"): 1}) and missed == 0, stats
+    with pymupdf.open(os.path.join(tmp, "s.pdf")) as out:
+        assert "44051401359" in out[0].get_text() and out.metadata.get("author") == "Jan Kowalski"
+        assert [a.type[1] for a in out[0].annots()] == ["Highlight"]
+    stats, _ = anon_pdf(os.path.join(tmp, "t.pdf"), os.path.join(tmp, "i.pdf"), None, (), ignore=["44051401359"])
+    assert not stats
     stats, missed = anon_pdf(os.path.join(tmp, "t.pdf"), os.path.join(tmp, "o.pdf"), None, ())
-    assert stats["PESEL"] == 1 and missed == 0
+    assert kategorie(stats)["PESEL"] == 1 and missed == 0
     out = pymupdf.open(os.path.join(tmp, "o.pdf"))
     txt = out[0].get_text()
     assert "44051401359" not in txt and "Wnioskodawca" in txt, txt
@@ -506,12 +728,28 @@ def selftest():
     page.add_widget(w)
     pdoc.save(os.path.join(tmp, "f.pdf"))
     stats, _ = anon_pdf(os.path.join(tmp, "f.pdf"), os.path.join(tmp, "fo.pdf"), None, ())
-    assert stats["PESEL"] == 1, stats
+    assert kategorie(stats)["PESEL"] == 1, stats
     out = pymupdf.open(os.path.join(tmp, "fo.pdf"))
     vals = [x.field_value for x in out[0].widgets()]
     assert vals == ["***********"], vals
     assert "44051401359" not in out[0].get_text()
     out.close()
+    stats, _ = anon_pdf(os.path.join(tmp, "f.pdf"), os.path.join(tmp, "fs.pdf"), None, (), skan=True)
+    assert stats == Counter({("PESEL", "44051401359"): 1}), stats  # pole liczone raz, nie tez z wygladu
+    with pymupdf.open(os.path.join(tmp, "fs.pdf")) as out:
+        assert [x.field_value for x in out[0].widgets()] == ["44051401359"]
+        assert [a.type[1] for a in out[0].annots()] == ["Square"]
+
+    # wsad: skanowanie folderu - nazwy _skan, raport z wartosciami, podsumowanie
+    wsad = os.path.join(tmp, "wsad")
+    os.makedirs(wsad)
+    for n in ("t.pdf", "t.docx"):
+        shutil.copy(os.path.join(tmp, n), wsad)
+    lines = []
+    razem = run_batch(wsad, os.path.join(tmp, "wynik"), None, ["Jan Kowalski"], lines.append, skan=True)
+    assert sorted(os.listdir(os.path.join(tmp, "wynik"))) == ["t_skan.docx", "t_skan.pdf"]
+    assert razem[("PESEL", "44051401359")] == 2, razem
+    assert "    44051401359 (x2)" in "\n".join(lines) and any("Podsumowanie (2 plikow)" in x for x in lines)
 
     # OCR: PESEL z bledna suma tylko w tekscie z OCR
     assert find_spans("nr 44051401358") == []
@@ -542,7 +780,7 @@ def selftest_ocr(tmp):
 
     def ocr_text(png):
         found = ocr_hits(png, None, ["Wnioskodawca", "Sygnatura", "Kowalski"])
-        return Counter(c for c, _ in found)
+        return Counter(c for c, _, _ in found)
 
     # zdjecie z telefonu: zapisane bokiem + EXIF (obrot 6 i pole Artist)
     jpg = scan_pix(rot=-90).tobytes("jpg")
@@ -553,7 +791,14 @@ def selftest_ocr(tmp):
     with open(src, "wb") as f:
         f.write(jpg[:2] + b"\xff\xe1" + (len(exif) + 2).to_bytes(2, "big") + exif + jpg[2:])
     stats, _ = anon_image(src, os.path.join(tmp, "foto_o.jpg"), None, ["Kowalski"])
-    assert stats == Counter({"PESEL": 1, "Lista słów": 1}), stats
+    assert stats == Counter({("PESEL", "44051401359"): 1, ("Lista słów", "Kowalski"): 1}), stats
+    # skanowanie: ramki, dane dalej czytelne; fraza pominieta nie jest zaznaczana
+    stats, _ = anon_image(src, os.path.join(tmp, "foto_s.jpg"), None, ["Kowalski"],
+                          ignore=["Kowalski"], skan=True)
+    assert stats == Counter({("PESEL", "44051401359"): 1}), stats
+    with pymupdf.open(os.path.join(tmp, "foto_s.jpg")) as d:
+        left = ocr_text(d[0].get_pixmap(dpi=OCR_DPI).tobytes("png"))
+    assert left["PESEL"] == 1, left
     raw = open(os.path.join(tmp, "foto_o.jpg"), "rb").read()
     assert b"Exif" not in raw and b"KOW" not in raw, "metadane zdjecia zostaly"
     # po anonimizacji OCR nie moze juz znalezc danych, a reszta tekstu zostaje
@@ -569,7 +814,7 @@ def selftest_ocr(tmp):
     d.save(os.path.join(tmp, "skan.pdf"))
     stats, missed = anon_pdf(os.path.join(tmp, "skan.pdf"), os.path.join(tmp, "skan_o.pdf"),
                              None, ["Kowalski"])
-    assert stats == Counter({"PESEL": 1, "Lista słów": 1}) and not missed, stats
+    assert kategorie(stats) == Counter({"PESEL": 1, "Lista słów": 1}) and not missed, stats
     with pymupdf.open(os.path.join(tmp, "skan_o.pdf")) as d:
         left = ocr_text(d[0].get_pixmap(dpi=OCR_DPI).tobytes("png"))
     assert left == Counter({"Lista słów": 2}), f"skan: dane widoczne po anonimizacji: {left}"
