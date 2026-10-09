@@ -59,9 +59,9 @@ Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
    (wersja 3.9 lub nowsza). W instalatorze zaznacz **„Add python.exe to PATH”**.
    Opcja „tcl/tk and IDLE” jest zaznaczona domyślnie i musi taka zostać.
    Uprawnienia administratora nie są potrzebne.
-2. **Program** — na stronie [github.com/DawidBochno/Anonimizacja-RODO](https://github.com/DawidBochno/Anonimizacja-RODO)
-   kliknij zielony przycisk **Code → Download ZIP**. Rozpakuj archiwum,
-   np. do `C:\Programy\Anonimizacja RODO`. Nie uruchamiaj programu z wnętrza ZIP-a.
+2. **Program** — pobierz `Anonimizacja-RODO-<wersja>.zip` z [najnowszego wydania](https://github.com/DawidBochno/Anonimizacja-RODO/releases/latest)
+   (sekcja *Assets*; albo **Code → Download ZIP** na stronie repozytorium). Rozpakuj archiwum,
+   np. do `C:\Programy\`. Nie uruchamiaj programu z wnętrza ZIP-a.
 3. Kliknij dwukrotnie **`install.bat`**. Instaluje biblioteki `PyMuPDF` i `python-docx` (potrzebny internet) i uruchamia test. Na końcu pojawia się
    **„selftest OK”**, co znaczy, że wszystko działa.
    Instalator dokłada też silnik OCR **Tesseract** (przez `winget`, może pojawić się okno UAC). Jest potrzebny tylko do skanów i zdjęć. Bez niego DOCX i PDF z tekstem działają normalnie. Model języka polskiego jest już w programie (`tessdata/`).
