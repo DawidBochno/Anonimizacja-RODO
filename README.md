@@ -56,7 +56,7 @@ Wynik trafia do folderu wyjściowego jako `nazwa_anonim.pdf` /
 ## Instalacja (jednorazowo)
 
 1. **Python** — pobierz z [python.org](https://www.python.org/downloads/windows/)
-   (wersja 3.9 lub nowsza). W instalatorze zaznacz **„Add python.exe to PATH”**.
+   (wersja 3.11 lub nowsza, najlepiej najnowsza). W instalatorze zaznacz **„Add python.exe to PATH”**.
    Opcja „tcl/tk and IDLE” jest zaznaczona domyślnie i musi taka zostać.
    Uprawnienia administratora nie są potrzebne.
 2. **Program** — pobierz `Anonimizacja-RODO-<wersja>.zip` z [najnowszego wydania](https://github.com/DawidBochno/Anonimizacja-RODO/releases/latest)
